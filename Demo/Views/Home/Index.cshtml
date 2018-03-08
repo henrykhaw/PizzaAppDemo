@@ -1,0 +1,250 @@
+﻿@model Demo.Models.PizzaTypeViewModel
+
+@{
+    ViewBag.Title = "Home Page";
+}
+<script src="https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/markerclusterer.js"></script>
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAyTlSgDOfORzuQzc-d3wRxvQpqX4PTyHA&libraries=visualization"></script>
+
+
+<div class="jumbotron">
+    <h1>Dude Where's My Pizza</h1>
+    <p class="lead">Reports all the pizzas within a given radius</p>
+</div>
+
+<div class="row">
+    <div id="report-container">
+        <div>
+            @Html.DropDownListFor(m => m.Name, Model.PizzaTypesList, "Select Pizza Type", new { @id="ddlPizzaType", @class = "form-control" })
+        </div>
+        @*<button type="submit" class="btn btn-primary">Update Map</button>*@
+        <br />
+        <div id="floating-panel" style="">
+            <div class="pull-right toggleit">
+                <a href="javascript:;" class="btn no-btn btn-default heatmap" data-value='no'>Heatmap</a>
+                <a href="javascript:;" class="btn yes-btn btn-default btn-selected pinmap" data-value='yes'>Pin Map</a>
+                <div id="filter-list">
+                    <input type="hidden" id="selected-chart-type" value="" />
+                </div>
+            </div>
+        </div>
+        <div id="heatmap-chart" class="chart-body"></div>
+    </div>
+</div>
+
+@section scripts {
+    <script>
+        var heatMapState = {
+            map: null,
+            heatmapLayer: null,
+            markerCluster: null,
+            allDealershipMarkers: [],
+            allDataMarkers: [],
+            allLayers: [],
+            currentMapType: 'pin'
+        };
+
+        var intensityStart = 23;
+        var defaultZoom = 11;
+
+        function buildGoogleMap(pizzaTypeId) {
+            $('.no-data-text').hide();
+            $('#floating-panel').hide();
+
+            if (heatMapState.map) {
+                // remove markers and heatmap layer
+                clearMap();
+            }
+
+            $.ajax({
+                url: '/Home/GetPizza/',
+                data: { pizzaType: pizzaTypeId },
+                method: 'post',
+                dataType: 'json',
+                complete: function (request) {
+                    var response = request.responseJSON || tryParseAsJSON(request.responseText);
+
+                    if (response && response.success) {
+                        $('#floating-panel').show();
+                        initMap(response.data_points);
+                    } else {
+                        $('#heatmap-chart').hide();
+                        $('.no-data-text').show();
+                    }
+                }
+            });
+        }
+
+        function scaleRadius(zoom, volume) {
+
+            var baseScale = 4;
+            var zoomScale = Math.pow(1.3, zoom - 2);
+            var volumeScale = 657 / volume;
+
+            // We want to lessen the effect of of our volume scaling a little
+            if (volumeScale > 1) {
+                volumeScale = ((volumeScale - 1) / 2) + 1;
+            } else if (volumeScale < 1) {
+                volumeScale = 1 - ((1 - volumeScale) / 1.25);
+            }
+
+            // Scale radius based on map zoop
+            rad = zoomScale * baseScale;
+
+            // Scale radius based on volume of points
+            area = Math.PI * Math.pow(rad, 2);
+            area = area * volumeScale;
+            rad = Math.sqrt(area / Math.PI);
+
+            // Set limits for extreme cases
+            if (rad < 5) {
+                rad = 5;
+            }
+
+            if (rad > 150) {
+                rad = 150;
+            }
+
+            return rad;
+        }
+
+        function clearMap() {
+            // clear all layers
+            $.each(heatMapState.allLayers, function () {
+                this.setMap(null);
+            });
+
+            // clear all data markers
+            $.each(heatMapState.allDataMarkers, function () {
+                this.setMap(null);
+            });
+
+            if (heatMapState.markerCluster)
+                heatMapState.markerCluster.clearMarkers();
+
+            heatMapState.markerCluster = null;
+            heatMapState.allLayers = [];
+            heatMapState.allDataMarkers = [];
+        }
+
+        function initMap(mapPoints) {
+            var heatmapDataPoints = [],
+                mapDataPoints = [];
+
+            $.each(mapPoints, function () {
+                var latlng = new google.maps.LatLng(this.lat, this.lng);
+                heatmapDataPoints.push(latlng);
+
+                mapDataPoints.push({
+                    position: latlng,
+                });
+            });
+
+            if (!heatMapState.map) {
+                heatMapState.map = new google.maps.Map(document.getElementById('heatmap-chart'), {
+                    zoom: defaultZoom,
+                    mapTypeId: 'roadmap'
+                });
+            }
+
+            $.each(mapDataPoints, function () {
+                var marker = new google.maps.Marker({
+                    position: this.position,
+                    animation: google.maps.Animation.DROP,
+                    icon: '/Content/pizza-icon.png'
+                });
+
+                if (marker) {
+                    heatMapState.allDataMarkers.push(marker);
+                }
+            });
+
+            // winnipeg
+            var mapCenter = new google.maps.LatLng(49.8534844, -97.2222905);
+
+            heatMapState.map.setCenter(mapCenter);
+            heatMapState.map.setZoom(defaultZoom);
+
+            if (heatmapDataPoints.length > 0) {
+                heatMapState.heatmapLayer = new google.maps.visualization.HeatmapLayer({
+                    data: heatmapDataPoints,
+                    dissipating: true,
+                    maxIntensity: intensityStart - defaultZoom,
+                    radius: scaleRadius(defaultZoom, heatmapDataPoints.length)
+                });
+            }
+
+            if (heatMapState.heatmapLayer) {
+                heatMapState.allLayers.push(heatMapState.heatmapLayer);
+            }
+
+            heatMapState.heatmapLayer.set('radius', scaleRadius(defaultZoom, heatmapDataPoints.length));
+            heatMapState.heatmapLayer.set('maxIntensity', intensityStart - defaultZoom);
+
+            // events
+            heatMapState.map.addListener('zoom_changed', function () {
+                var zoom = heatMapState.map.getZoom();
+                heatMapState.heatmapLayer.set('radius', scaleRadius(zoom, heatmapDataPoints.length));
+                heatMapState.heatmapLayer.set('maxIntensity', intensityStart - zoom);
+            });
+
+            $('#heatmap-chart').show();
+
+            if (heatMapState.currentMapType == 'pin') {
+                showPinMap();
+            }
+            else {
+                showHeatMap();
+            }
+        }
+
+        function showPinMap() {
+            $('#selected-chart-type').val('pin');
+            heatMapState.heatmapLayer.setMap(null);
+            heatMapState.markerCluster = new MarkerClusterer(heatMapState.map, heatMapState.allDataMarkers, {
+                imagePath: 'https://developers.google.com/maps/documentation/javascript/examples/markerclusterer/m',
+                gridSize: 20, maxZoom: null, minimumClusterSize: 5
+            });
+
+            heatMapState.currentMapType = 'pin';
+        }
+
+        function showHeatMap() {
+            $('#selected-chart-type').val('heat');
+            if (heatMapState.markerCluster) {
+                heatMapState.markerCluster.clearMarkers();
+                heatMapState.markerCluster = null;
+            }
+            heatMapState.heatmapLayer.setMap(heatMapState.map);
+            heatMapState.currentMapType = 'heat';
+        }
+
+        $(function () {
+
+            $("#ddlPizzaType").change(function () {
+                var strPizzaType = "";
+
+                $("#ddlPizzaType option:selected").each(function () {
+                    strPizzaType += $(this).val();
+                });
+
+                buildGoogleMap(strPizzaType);
+            });
+
+            var floatingPanel = $('#floating-panel');
+            floatingPanel.find('.no-btn, .yes-btn').click(function () {
+                $(this).addClass('btn-selected');
+                $(this).siblings('a').removeClass('btn-selected');
+                $(this).siblings('a').addClass('btn-default');
+            });
+            floatingPanel.find('.heatmap').click(function () {
+                showHeatMap();
+            });
+            floatingPanel.find('.pinmap').click(function () {
+                showPinMap();
+            });
+
+            buildGoogleMap();
+        });
+    </script>
+}
